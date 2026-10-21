@@ -1,16 +1,17 @@
-﻿// -----------------------------------------------------------------------
-// Copyright (c) Microsoft Corporation.  All rights reserved.
-// -----------------------------------------------------------------------
+﻿using BenchmarkDotNet.Running;
 
-using BenchmarkDotNet.Running;
+namespace NamedPipeRpc.Benchmark;
 
-namespace NamedPipeRpc.Benchmark
+/// <summary>
+/// 仅运行 NamedPipeRpc 相关基准（延迟 / 载荷 / 吞吐 / 服务发现）。
+/// </summary>
+internal static class Program
 {
-    internal class Program
+    static void Main(string[] args)
     {
-        static void Main(string[] args)
-        {
-            var _ = BenchmarkRunner.Run(typeof(Program).Assembly);
-        }
+        BenchmarkRunner.Run<IpcLatencyBenchmarks>();
+        BenchmarkRunner.Run<IpcPayloadBenchmarks>();
+        BenchmarkRunner.Run<IpcThroughputBenchmarks>();
+        BenchmarkRunner.Run<ServiceDiscoveryBenchmarks>();
     }
 }

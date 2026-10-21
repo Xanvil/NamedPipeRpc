@@ -1,15 +1,14 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net472;net8.0</TargetFrameworks>
-    <LangVersion>latest</LangVersion>
+    <!-- TargetFrameworks / LangVersion 见 Directory.Build.props -->
     <OutputType>Exe</OutputType>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- 版本由 Directory.Packages.props 中央管理，此处不得写 Version（否则 NU1008） -->
-    <PackageReference Include="BenchmarkDotNet"  Version="0.15.8"/>
-    <PackageReference Include="Microsoft.VisualStudio.DiagnosticsHub.BenchmarkDotNetDiagnosers" Version="18.7.37220.1"/>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Microsoft.VisualStudio.DiagnosticsHub.BenchmarkDotNetDiagnosers" />
   </ItemGroup>
 
   <ItemGroup>

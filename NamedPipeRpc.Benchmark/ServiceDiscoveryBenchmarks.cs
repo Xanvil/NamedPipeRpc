@@ -9,7 +9,8 @@ using Xanvil.NamedPipeRpc;
 namespace NamedPipeRpc.Benchmark;
 
 /// <summary>
-/// 服务发现 / 单条订阅 / 定向推送相关基准，与 NamedPipeRpc.Test 中 ServiceDiscoveryTests 场景对应。
+/// 服务发现 / 单条订阅 / 定向推送相关基准，与 NamedPipeRpc.Test.ServiceDiscoveryTests 场景对应。
+/// 对外方法：ListRemoteRequests / ListRemoteNotifies / SubscribeExisting / NotifyBroadcast / NotifySubscribersDirected。
 /// </summary>
 [MemoryDiagnoser]
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]

@@ -244,4 +244,55 @@ await peer.UnsubscribeAsync("order.updated"); // 移出期望集，之后不再�
 | 工程 | 内容 |
 |------|------|
 | [`NamedPipeRpc.Test`](../NamedPipeRpc.Test) | 功能测试；发现 / 订阅 / 定向推送见 `ServiceDiscoveryTests` |
-| [`NamedPipeRpc.Benchmark`](../NamedPipeRpc.Benchmark) | `IpcBenchmarks`（Request 延迟）、`ServiceDiscoveryBenchmarks`（列表 / 订阅 / 推送） |
+| [`NamedPipeRpc.Benchmark`](../NamedPipeRpc.Benchmark) | `IpcLatencyBenchmarks` / `IpcPayloadBenchmarks` / `IpcThroughputBenchmarks` / `ServiceDiscoveryBenchmarks` |
+
+### 性能结果（.NET 8）
+
+环境：BenchmarkDotNet v0.15.8，Windows 11，Intel Core i5-12400F，**.NET 8.0.32**。  
+场景：单命名管道、单连接（吞吐并发用例除外）；Handler 无人为 `Delay`。数值随硬件变化，仅供参考。
+
+复现：
+
+```bash
+dotnet run -c Release -f net8.0 --project NamedPipeRpc.Benchmark
+```
+
+#### 延迟（`IpcLatencyBenchmarks`）
+
+| Method | Mean | Allocated | 说明 |
+|--------|-----:|----------:|------|
+| `EmptyNotify` | 26.15 μs | 1.27 KB | 单向 Notify（无应答） |
+| `EmptyRequest` | 40.78 μs | 2.56 KB | 空载荷 Request 往返（基线） |
+| `ComplexJsonRequest` | 69.92 μs | 4.71 KB | 嵌套对象 JSON 往返（无业务等待） |
+
+#### 载荷梯度（`IpcPayloadBenchmarks`，`byte[]` Echo）
+
+| PayloadBytes | Mean | Allocated |
+|-------------:|-----:|----------:|
+| 0 | 60.13 μs | 2.99 KB |
+| 1,024 | 63.14 μs | 5.04 KB |
+| 16,384 | 83.16 μs | 35.11 KB |
+| 65,536 | 132.70 μs | 131.48 KB |
+
+> 0 字节 Echo 仍走 `byte[]` JSON，故慢于 `Unit` 空 Request。
+
+#### 吞吐（`IpcThroughputBenchmarks`）
+
+| Method | 批量 | Mean（整批） | 换算吞吐 | Allocated（整批） |
+|--------|-----:|-------------:|---------:|------------------:|
+| `SerialEmptyRequests` | 1,000 串行 | 34.00 ms | **≈ 29.4k ops/s** | 2500 KB |
+| `ConcurrentEmptyRequests` | 64 并发 | 1.261 ms | **≈ 50.8k ops/s** | 161 KB |
+
+吞吐 = 批量次数 / Mean。并发对齐默认 `MaxConcurrent = 64`。
+
+#### 服务发现与推送（`ServiceDiscoveryBenchmarks`，单连接已订阅）
+
+| Method | Mean | Allocated |
+|--------|-----:|----------:|
+| `NotifySubscribers` 定向 | 25.46 μs | 1.42 KB |
+| `Notify` 全量广播 | 25.65 μs | 1.42 KB |
+| `ListRemoteNotifyMethods` | 52.81 μs | 3.5 KB |
+| `ListRemoteRequestMethods` | 53.49 μs | 3.55 KB |
+| `SubscribeAsync`（方法已存在） | 62.62 μs | 3.08 KB |
+
+原始报告（本地运行后生成）：`BenchmarkDotNet.Artifacts/results/*-report-github.md`。

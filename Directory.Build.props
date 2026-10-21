@@ -1,0 +1,13 @@
+<Project>
+  <!--
+    解决方案级公共属性：所有子项目自动导入。
+    在此统一目标框架、语言版本与可空/隐式 using，避免各 csproj 重复声明。
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net472;net8.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+</Project>

@@ -3,31 +3,15 @@ using BenchmarkDotNet.Order;
 
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using System.Threading.Tasks;
 
 using Xanvil.NamedPipeRpc;
 
-namespace NamedPipeRpc.Test;
+namespace NamedPipeRpc.Benchmark;
 
-
-// 简单 Handler（用于基础性能测试）
-public class TestHandler : IRequestHandler
-{
-    public string MethodName => "test.add";
-
-    //public Task<int> Handle(int request, CancellationToken ct)
-    //{
-    //    return Task.FromResult(request + request);
-    //}
-
-    public Task<Unit> Handle(RpcContext<Unit> context, CancellationToken ct)
-    {
-        return Unit.Task;
-    }
-}
-
-// 复杂业务模型
+/// <summary>
+/// 复杂业务模型：用于测量 JSON 序列化往返开销（Handler 内无人为 Delay）。
+/// </summary>
 public class ComplexRequest
 {
     public int Id { get; set; }
@@ -50,96 +34,209 @@ public class ComplexResponse
     public int ProcessedCount { get; set; }
 }
 
-// 复杂 Handler（模拟真实业务耗时和 CPU 计算）
-public class ComplexHandler : IRequestHandler<ComplexRequest, ComplexResponse>
-{
-    public string MethodName => "test_complex.process";
-
-    public async Task<ComplexResponse> Handle(RpcContext<ComplexRequest> context, CancellationToken ct)
-    {
-        // 模拟 1ms 的 I/O 或业务等待
-        await Task.Delay(1, ct);
-
-        // 模拟 CPU 密集型计算
-        int sum = 0;
-        for (int i = 0; i < 1000; i++) sum += i;
-
-        return new ComplexResponse
-        {
-            Success = true,
-            Message = $"Processed {context.Message.Name} with {context.Message.Tags.Count} tags",
-            ProcessedCount = context.Message.Id
-        };
-    }
-}
-
-
-// [MemoryDiagnoser] 会自动统计每次调用的内存分配字节数和 GC 回收次数
+/// <summary>
+/// 单连接延迟基准：空载荷 Request/Notify、复杂 JSON（无 Delay）。
+/// 两端使用独立 HandlerRouter，贴近生产用法。
+/// </summary>
 [MemoryDiagnoser]
-// 确保测试按指定顺序执行
 [Orderer(SummaryOrderPolicy.FastestToSlowest)]
-public class IpcBenchmarks
+public class IpcLatencyBenchmarks
 {
-    private RpcService _rpcService;
-    private RpcClient _client;
-    private NamedPipePeer _peer;
-    private ComplexRequest _complexRequest;
+    const string EmptyMethod = "bench.empty";
+    const string ComplexMethod = "bench.complex";
+    const string NotifyMethod = "bench.notify";
 
-    // ⚡ 全局初始化：在每次基准测试开始前，只执行一次（避免把连接建立的耗时算进通信里）
+    RpcService _rpcService = null!;
+    RpcClient _client = null!;
+    NamedPipePeer _peer = null!;
+    ComplexRequest _complexRequest = null!;
+
+    /// <summary>建连并注册 Handler。</summary>
     [GlobalSetup]
     public async Task GlobalSetup()
     {
-        HandlerRouter router = new HandlerRouter();
-        router.AddRequestHandler(new TestHandler());
-        router.AddRequestHandler(new ComplexHandler());
+        var serverRouter = new HandlerRouter();
+        // 空载荷：立即返回，测量协议 + 管道往返下限
+        serverRouter.AddRequestHandler(EmptyMethod, () => { });
+        // 复杂 JSON：无 Task.Delay，仅序列化与拷贝字段
+        serverRouter.AddRequestHandler<ComplexRequest, ComplexResponse>(ComplexMethod, (ctx, ct) =>
+        {
+            var req = ctx.Message;
+            return Task.FromResult(new ComplexResponse
+            {
+                Success = true,
+                Message = req.Name,
+                ProcessedCount = req.Id,
+            });
+        });
+        serverRouter.AddNotifyHandler<string>(NotifyMethod, _ => { });
 
-        _rpcService = new RpcService("bench_pipe", router);
+        var pipe = "bench_latency_" + Guid.NewGuid().ToString("N");
+        _rpcService = new RpcService(pipe, serverRouter);
         _rpcService.Start();
 
-        _client = new RpcClient("bench_pipe", router);
+        var clientRouter = new HandlerRouter();
+        clientRouter.AddNotifyHandler<string>(NotifyMethod, _ => { });
+        _client = new RpcClient(pipe, clientRouter);
         _peer = await _client.ConnectAsync();
 
-        // 构造复杂请求
         _complexRequest = new ComplexRequest
         {
             Id = 12345,
-            Name = "Benchmark AllPayload",
+            Name = "Benchmark Payload",
             Timestamp = DateTime.UtcNow,
             Tags = new List<string> { "ipc", "benchmark", "dotnet" },
             Details = new NestedObject
             {
                 Score = 99.9,
-                Metadata = new Dictionary<string, int> { { "cpu", 8 }, { "memory", 16 } }
-            }
+                Metadata = new Dictionary<string, int> { { "cpu", 8 }, { "memory", 16 } },
+            },
         };
 
-        // ⚡ 预热：BenchmarkDotNet 内部也会预热，但显式预热一次能确保 ArrayPool 和 JIT 完全就绪
-        await _peer.Request("test.add");
-        await _peer.Request<ComplexRequest, ComplexResponse>("test_complex.process", _complexRequest);
+        await _peer.Request(EmptyMethod);
+        await _peer.Request<ComplexRequest, ComplexResponse>(ComplexMethod, _complexRequest);
+        await _peer.Notify(NotifyMethod, "warmup");
     }
 
-    // ⚡ 全局清理：测试结束后关闭连接
+    /// <summary>关闭连接与服务端。</summary>
     [GlobalCleanup]
     public void GlobalCleanup()
     {
+        _peer?.Close();
+        _client?.Dispose();
         _rpcService?.Close();
     }
 
-    /// <summary>
-    /// 基准测试 1：简单 int 类型的极限吞吐
-    /// </summary>
-    [Benchmark(Baseline = true)] // 设为基线，方便对比其他方法的倍数
-    public  async Task SimpleInt_Request()
+    /// <summary>空载荷 Request 往返（基线延迟）。</summary>
+    [Benchmark(Baseline = true)]
+    public Task EmptyRequest() => _peer.Request(EmptyMethod);
+
+    /// <summary>单向 Notify（无应答）；测量发送路径。</summary>
+    [Benchmark]
+    public Task EmptyNotify() => _peer.Notify(NotifyMethod, "x");
+
+    /// <summary>复杂对象 JSON Request（Handler 无人为等待）。</summary>
+    [Benchmark]
+    public Task<ComplexResponse> ComplexJsonRequest()
+        => _peer.Request<ComplexRequest, ComplexResponse>(ComplexMethod, _complexRequest);
+}
+
+/// <summary>
+/// 载荷大小梯度：byte[] Echo 往返。与延迟类分开，避免 Params 污染空载荷用例。
+/// </summary>
+[MemoryDiagnoser]
+[Orderer(SummaryOrderPolicy.FastestToSlowest)]
+public class IpcPayloadBenchmarks
+{
+    const string EchoMethod = "bench.echo";
+
+    RpcService _rpcService = null!;
+    RpcClient _client = null!;
+    NamedPipePeer _peer = null!;
+    byte[] _payload = null!;
+
+    /// <summary>请求/响应载荷字节数。</summary>
+    [Params(0, 1024, 16384, 65536)]
+    public int PayloadBytes { get; set; }
+
+    /// <summary>建连；按 PayloadBytes 构造缓冲区。</summary>
+    [GlobalSetup]
+    public async Task GlobalSetup()
     {
-        await _peer.Request("test.add");
+        var serverRouter = new HandlerRouter();
+        serverRouter.AddRequestHandler<byte[], byte[]>(EchoMethod, (ctx, ct) => Task.FromResult(ctx.Message));
+
+        var pipe = "bench_payload_" + Guid.NewGuid().ToString("N");
+        _rpcService = new RpcService(pipe, serverRouter);
+        _rpcService.Start();
+
+        _client = new RpcClient(pipe, new HandlerRouter());
+        _peer = await _client.ConnectAsync();
+
+        _payload = new byte[PayloadBytes];
+        if (PayloadBytes > 0)
+            new Random(42).NextBytes(_payload);
+
+        await _peer.Request<byte[], byte[]>(EchoMethod, _payload);
     }
 
-    /// <summary>
-    /// 基准测试 2：复杂对象 + 模拟 1ms 业务耗时
-    /// </summary>
-    [Benchmark]
-    public async Task<ComplexResponse> ComplexObject_Request()
+    /// <summary>释放资源。</summary>
+    [GlobalCleanup]
+    public void GlobalCleanup()
     {
-        return await _peer.Request<ComplexRequest, ComplexResponse>("test_complex.process", _complexRequest);
+        _peer?.Close();
+        _client?.Dispose();
+        _rpcService?.Close();
+    }
+
+    /// <summary>指定大小的 byte[] Echo 往返。</summary>
+    [Benchmark]
+    public Task<byte[]> PayloadEcho()
+        => _peer.Request<byte[], byte[]>(EchoMethod, _payload);
+}
+
+/// <summary>
+/// 吞吐基准：串行批量与并发 Request。
+/// Mean 为整批耗时；吞吐 ≈ BatchSize(或 ConcurrentCount) / Mean。
+/// </summary>
+[MemoryDiagnoser]
+[Orderer(SummaryOrderPolicy.FastestToSlowest)]
+public class IpcThroughputBenchmarks
+{
+    const string EmptyMethod = "bench.empty";
+
+    /// <summary>串行批量大小；换算 ops/s 时用 BatchSize / Mean。</summary>
+    public const int BatchSize = 1000;
+
+    /// <summary>并发请求数；对齐默认 MaxConcurrent=64。</summary>
+    public const int ConcurrentCount = 64;
+
+    RpcService _rpcService = null!;
+    RpcClient _client = null!;
+    NamedPipePeer _peer = null!;
+
+    /// <summary>建连；服务端空 Handler。</summary>
+    [GlobalSetup]
+    public async Task GlobalSetup()
+    {
+        var serverRouter = new HandlerRouter();
+        serverRouter.AddRequestHandler(EmptyMethod, () => { });
+
+        var pipe = "bench_throughput_" + Guid.NewGuid().ToString("N");
+        _rpcService = new RpcService(pipe, serverRouter);
+        _rpcService.Start();
+
+        _client = new RpcClient(pipe, new HandlerRouter());
+        _peer = await _client.ConnectAsync();
+
+        for (int i = 0; i < 100; i++)
+            await _peer.Request(EmptyMethod);
+    }
+
+    /// <summary>释放资源。</summary>
+    [GlobalCleanup]
+    public void GlobalCleanup()
+    {
+        _peer?.Close();
+        _client?.Dispose();
+        _rpcService?.Close();
+    }
+
+    /// <summary>串行空 Request × <see cref="BatchSize"/>（Mean = 整批耗时）。</summary>
+    [Benchmark(Baseline = true)]
+    public async Task SerialEmptyRequests()
+    {
+        for (int i = 0; i < BatchSize; i++)
+            await _peer.Request(EmptyMethod);
+    }
+
+    /// <summary>并发空 Request × <see cref="ConcurrentCount"/>（Mean = 整批完成耗时）。</summary>
+    [Benchmark]
+    public async Task ConcurrentEmptyRequests()
+    {
+        var tasks = new Task[ConcurrentCount];
+        for (int i = 0; i < ConcurrentCount; i++)
+            tasks[i] = _peer.Request(EmptyMethod);
+        await Task.WhenAll(tasks);
     }
 }

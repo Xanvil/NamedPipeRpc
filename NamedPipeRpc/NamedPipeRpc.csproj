@@ -1,17 +1,15 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net472;net8.0</TargetFrameworks>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <LangVersion>latest</LangVersion>
+    <!-- TargetFrameworks / LangVersion / Nullable / ImplicitUsings 见 Directory.Build.props -->
     <RootNamespace>Xanvil.NamedPipeRpc</RootNamespace>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Text.Json" Version="8.0.6"/>
-    <PackageReference Include="System.Threading.Channels" Version="8.0.0"/>
+    <!-- 版本见 Directory.Packages.props -->
+    <PackageReference Include="System.Text.Json" />
+    <PackageReference Include="System.Threading.Channels" />
   </ItemGroup>
 
 </Project>

@@ -1,0 +1,26 @@
+<Project>
+  <!--
+    NuGet 中央包版本管理（CPM）。
+    启用后各 csproj 的 PackageReference 不得再写 Version（否则 NU1008）；
+    统一在此用 PackageVersion 维护版本号。
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- NamedPipeRpc 主库 -->
+    <PackageVersion Include="System.Text.Json" Version="8.0.6" />
+    <PackageVersion Include="System.Threading.Channels" Version="8.0.0" />
+
+    <!-- 测试 -->
+    <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
+    <PackageVersion Include="coverlet.collector" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
+
+    <!-- 基准测试 -->
+    <PackageVersion Include="Microsoft.VisualStudio.DiagnosticsHub.BenchmarkDotNetDiagnosers" Version="18.7.37220.1" />
+  </ItemGroup>
+</Project>
