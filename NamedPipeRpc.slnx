@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="NamedPipeRpc.Benchmark/NamedPipeRpc.Benchmark.csproj" />
+  <Project Path="NamedPipeRpc.Test/NamedPipeRpc.Test.csproj" />
+  <Project Path="NamedPipeRpc/NamedPipeRpc.csproj" />
+</Solution>
