@@ -87,9 +87,16 @@ jobs:
         with:
           user: ${{ secrets.NUGET_USER }}
 
+      # Windows PowerShell 不会展开 *.nupkg，必须先解析真实路径再 push
       - name: Push to nuget.org
+        shell: pwsh
         run: |
-          dotnet nuget push artifacts/nuget/*.nupkg `
-            --api-key ${{ steps.login.outputs.NUGET_API_KEY }} `
-            --source https://api.nuget.org/v3/index.json `
-            --skip-duplicate
+          $packages = Get-ChildItem -Path artifacts/nuget -Filter *.nupkg
+          if (-not $packages) { throw "未找到 nupkg：artifacts/nuget" }
+          foreach ($pkg in $packages) {
+            Write-Host "Pushing $($pkg.FullName)"
+            dotnet nuget push $pkg.FullName `
+              --api-key ${{ steps.login.outputs.NUGET_API_KEY }} `
+              --source https://api.nuget.org/v3/index.json `
+              --skip-duplicate
+          }
