@@ -16,6 +16,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\NamedPipeRpc\NamedPipeRpc.csproj" />
+    <!--
+      跨程序集契约测试：两端各自跑 Source Generator，产生同名 RpcGeneratedExtensions。
+      使用 Aliases + 测试源中的 extern alias 消歧，分别调用两端的 Add*Handler 与 Get*Proxy。
+    -->
+    <ProjectReference Include="..\NamedPipeRpc.Test.ClientContracts\NamedPipeRpc.Test.ClientContracts.csproj"
+                      Aliases="ClientContracts" />
+    <ProjectReference Include="..\NamedPipeRpc.Test.ServerContracts\NamedPipeRpc.Test.ServerContracts.csproj"
+                      Aliases="ServerContracts" />
   </ItemGroup>
 
   <ItemGroup>

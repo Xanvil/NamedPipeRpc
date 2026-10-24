@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "DebugRoslynComponent": {
+      "commandName": "DebugRoslynComponent",
+      "targetProject": "../NamedPipeRpc.Test/NamedPipeRpc.Test.csproj"
+    }
+  }
+}

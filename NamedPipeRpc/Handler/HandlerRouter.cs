@@ -59,6 +59,17 @@ public class HandlerRouter
 {
     readonly Dictionary<string, INotifyHandlerWrapper> _notifyHandlers = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, IRequestHandlerWrapper> _requestHandlers = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>已登记实现、但未选择连接后自动订阅的 Notify 方法名。</summary>
+    readonly HashSet<string> _notifyExposeOnly = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>调用过自动订阅登记的 Notify 方法名。之后再登记实现时仍保持自动订阅。</summary>
+    readonly HashSet<string> _notifyAutoSubscribe = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>契约工厂。连接 Start 时逐个调用，为该连接创建处理器。</summary>
+    readonly List<Action<NamedPipePeer>> _connectionActivators = new();
+    /// <summary>已经 Start、尚未释放的连接。后登记的工厂也会在这些连接上创建实例。</summary>
+    readonly List<NamedPipePeer> _activePeers = new();
+    /// <summary>已经登记过工厂的契约类型，避免同一契约登记两次。</summary>
+    readonly HashSet<Type> _connectionContracts = new();
+    readonly object _connectionSync = new();
 
     /// <summary>包内：新 Request 方法首次注册时回调（供 RpcService 推 <c>requestOpened</c>）。</summary>
     internal Action<RpcRequestMethodInfo>? OnRequestOpened;
@@ -198,10 +209,89 @@ public class HandlerRouter
     /// </summary>
     void RegisterNotifyHandler(string method, INotifyHandlerWrapper wrapper)
     {
+        _notifyExposeOnly.Remove(method);
         bool isNew = !_notifyHandlers.ContainsKey(method);
         _notifyHandlers[method] = wrapper;
         if (isNew)
             OnNotifyOpened?.Invoke(ToNotifyMethodInfo(wrapper));
+    }
+
+    /// <summary>
+    /// 契约 <c>AddNotifyHandler</c> 登记实现之后调用。
+    /// 本端可以接收该方法；尚未 <see cref="UseNotifyAutoSubscribe"/> 时不进入自动订阅清单。
+    /// </summary>
+    public void KeepNotifyLocal(string method)
+    {
+        if (method is null) throw new ArgumentNullException(nameof(method));
+        if (_notifyAutoSubscribe.Contains(method))
+            return;
+        _notifyExposeOnly.Add(method);
+    }
+
+    /// <summary>
+    /// 连接建立后自动订阅该方法。方法已有 Handler 时才会出现在订阅快照里。
+    /// </summary>
+    public void UseNotifyAutoSubscribe(string method)
+    {
+        if (method is null) throw new ArgumentNullException(nameof(method));
+        _notifyAutoSubscribe.Add(method);
+        _notifyExposeOnly.Remove(method);
+    }
+
+    /// <summary>
+    /// 标记契约已登记工厂。同一契约重复登记时抛出 <see cref="InvalidOperationException"/>。
+    /// </summary>
+    public void ReserveConnectionContract(Type contractType)
+    {
+        if (contractType is null) throw new ArgumentNullException(nameof(contractType));
+        lock (_connectionSync)
+        {
+            if (!_connectionContracts.Add(contractType))
+                throw new InvalidOperationException($"契约 {contractType.FullName} 已登记处理器工厂。");
+        }
+    }
+
+    /// <summary>
+    /// 记住连接级工厂，并立刻对已经 Start 的连接各创建一次。
+    /// </summary>
+    public void AddConnectionFactory(Action<NamedPipePeer> activate)
+    {
+        if (activate is null) throw new ArgumentNullException(nameof(activate));
+        NamedPipePeer[] peers;
+        lock (_connectionSync)
+        {
+            _connectionActivators.Add(activate);
+            peers = _activePeers.ToArray();
+        }
+
+        foreach (var peer in peers)
+            activate(peer);
+    }
+
+    /// <summary>
+    /// 连接 <see cref="NamedPipePeer.Start"/> 开头调用。为已登记的工厂各创建一个实例。
+    /// </summary>
+    internal void ActivateConnection(NamedPipePeer peer)
+    {
+        if (peer is null) throw new ArgumentNullException(nameof(peer));
+        Action<NamedPipePeer>[] activators;
+        lock (_connectionSync)
+        {
+            if (!_activePeers.Contains(peer))
+                _activePeers.Add(peer);
+            activators = _connectionActivators.ToArray();
+        }
+
+        foreach (var activate in activators)
+            activate(peer);
+    }
+
+    /// <summary>连接释放时移出活动列表，避免之后的工厂再在这条连接上创建实例。</summary>
+    internal void DeactivateConnection(NamedPipePeer peer)
+    {
+        if (peer is null) return;
+        lock (_connectionSync)
+            _activePeers.Remove(peer);
     }
 
     /// <summary>
@@ -235,10 +325,20 @@ public class HandlerRouter
     /// </summary>
     internal string[] SnapshotNotifyMethodNames()
     {
-        var names = new string[_notifyHandlers.Count];
+        int count = 0;
+        foreach (var kv in _notifyHandlers)
+        {
+            if (!_notifyExposeOnly.Contains(kv.Key))
+                count++;
+        }
+        var names = new string[count];
         int i = 0;
         foreach (var kv in _notifyHandlers)
+        {
+            if (_notifyExposeOnly.Contains(kv.Key))
+                continue;
             names[i++] = kv.Value.MethodName;
+        }
         return names;
     }
 

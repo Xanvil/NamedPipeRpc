@@ -4,6 +4,11 @@
     <File Path="Directory.Packages.props" />
   </Folder>
   <Project Path="NamedPipeRpc.Benchmark/NamedPipeRpc.Benchmark.csproj" />
+  <Project Path="NamedPipeRpc.Generators/NamedPipeRpc.Generators.csproj" />
+  <Project Path="NamedPipeRpc.PackageSmoke/NamedPipeRpc.PackageSmoke.csproj" />
+  <Project Path="NamedPipeRpc.Test.ClientContracts/NamedPipeRpc.Test.ClientContracts.csproj" />
+  <Project Path="NamedPipeRpc.Test.ServerContracts/NamedPipeRpc.Test.ServerContracts.csproj" />
   <Project Path="NamedPipeRpc.Test/NamedPipeRpc.Test.csproj" />
   <Project Path="NamedPipeRpc/NamedPipeRpc.csproj" />
 </Solution>
+

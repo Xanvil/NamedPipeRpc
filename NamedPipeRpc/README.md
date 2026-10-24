@@ -2,14 +2,14 @@
 
 基于 Windows 命名管道的双向 RPC 库（命名空间 `Xanvil.NamedPipeRpc`），面向同机进程间 IPC。目标框架：`net472` / `net8.0`。载荷序列化使用 `System.Text.Json`（`IncludeFields`、属性名大小写不敏感）。
 
-架构关系图见 [NamedPipeRpc.struct.md](NamedPipeRpc.struct.md)。
+架构关系图见 [NamedPipeRpc.struct.md](NamedPipeRpc.struct.md)；契约 Handler / Proxy 见 [NamedPipeRpc.Notify.struct.md](NamedPipeRpc.Notify.struct.md)。
 
 ## 心智模型
 
 1. **Peer 是中心**：`RpcService` / `RpcClient` 只负责建连；业务收发在 `NamedPipePeer`（单连接）与 `PipePeers`（多连接广播）。
 2. **Router 是本端目录**：`HandlerRouter` 只登记本端可处理的方法；对端目录通过 Sys 查询 / 推送获知。生产中两端应各自持有独立 Router，不要共享实例。
-3. **无 Attribute / 无程序集扫描**：只能通过 `AddRequestHandler` / `AddNotifyHandler`（接口或委托）显式注册。
-4. **客户端订阅 Notify 须预注册**：若要接收对端名为 `order.updated`（等）的通知，须在 `ConnectAsync` **之前**对本端 Router 调用 `AddNotifyHandler` 注册同名方法；连接成功、`Peer.Start` 后会自动对这些已注册方法发起 `SubscribeAsync`。
+3. **无程序集扫描**：底层仍用按方法名的 `AddRequestHandler` / `AddNotifyHandler`。契约由 Source Generator 生成 `Add*Handler`、`AddNotifyProxy` 和连接上的 `Get*Proxy`，须显式调用。
+4. **契约通知的自动订阅要单独登记**：按方法名的 `AddNotifyHandler` 仍会在连接后自动订阅。契约上的 `AddNotifyHandler<T>(factory)` 只表示本端可以接收，并且每条连接创建一个实例；要在连接后自动订阅，还要调用 `AddNotifyProxy<T>()`。
 
 消息语义：
 
@@ -62,17 +62,158 @@ public class PayHandler : IRequestHandler<int, int>
 router.AddRequestHandler(new PayHandler());
 ```
 
+## 接口契约（Source Generator）
+
+`[RpcRequest]` 表示请求服务，`[RpcNotify]` 表示通知通道。同一个接口可以同时出现在服务端和客户端，接口本身不表示角色：
+
+| 调用 | 角色 |
+|------|------|
+| `router.AddRequestHandler<T>(factory)` | 登记请求目录。每条连接 `Start` 时创建一个实例 |
+| `router.AddNotifyHandler<T>(factory)` | 本端可以接收的通知。每条连接一个实例，不因此自动订阅 |
+| `router.AddNotifyProxy<T>()` | 连接建立后自动订阅该通知契约 |
+| `peer.Get*Proxy<T>()` | 返回源生成器生成的代理，只发到这一条连接。静态类型是契约接口 |
+
+`Get*Proxy` 返回的对象实现 `T`，但是生成的代理，不能再传给 `Add*Handler`。关系图见 [NamedPipeRpc.Notify.struct.md](NamedPipeRpc.Notify.struct.md)。按方法名的 `AddRequestHandler(string, ...)` / `AddNotifyHandler(string, ...)` 仍然可用，不经过生成器。
+
+### 特性
+
+| 特性 | 标在 | 作用 |
+|------|------|------|
+| `[RpcRequest]` / `[RpcRequest("前缀")]` | 接口或服务类 | 请求服务。`""` 表示默认无前缀；省略则用类型短名 |
+| `[RpcNotify]` / `[RpcNotify("前缀")]` | 仅接口 | 通知通道。方法必须全部返回非泛型 `Task` |
+| `[RpcMethod("整段名")]` | 方法 | 覆盖完整 RPC 名 |
+| `[RpcMethod(Prefix = "…")]` | 方法 | 只覆盖本方法前缀，含 `Prefix = ""` |
+
+一个类型不能同时标 `[RpcRequest]` 和 `[RpcNotify]`。
+
+### 跨程序集匹配（不要求共享接口 DLL）
+
+管道上不要求两端引用同一契约程序集，也不要求 CLR 类型同一。互通只认：
+
+1. **RPC 方法名**字符串一致（OrdinalIgnoreCase）
+2. **载荷 / 响应 JSON 形状**兼容（属性或字段名对应；两端可以是不同的 `PayReq` 类型）
+
+每端各自定义接口、各自跑生成器。默认名是 `{前缀}.{短名}`：短名是 CLR 方法名去掉尾缀 `Async`；前缀是特性构造参数，未写则用类型短名。
+
+```csharp
+[RpcRequest]
+public interface IBilling
+{
+    Task<int> PayAsync(PayReq req, CancellationToken ct = default); // IBilling.Pay
+
+    [RpcMethod("billing.refund")]
+    Task RefundAsync(RefundReq req, CancellationToken ct = default);
+}
+
+[RpcNotify]
+public interface IOrderEvents
+{
+    Task UpdatedAsync(string msg, CancellationToken ct = default); // IOrderEvents.Updated
+}
+```
+
+业务参数个数决定载荷，两种形状不要混用。`CancellationToken` 不进载荷。没有业务参数时不写载荷。
+
+| 业务参数 | 载荷 | 名称 |
+|---|---|---|
+| 1 个 | 就是这个参数的 JSON。`PayAsync(PayReq req)` 的载荷是 `PayReq` 本身 | 不要求两端参数名一致 |
+| 2 个及以上 | 生成参数包。`DescribeAsync(int id, string tag)` 的载荷是 `{ "id": 1, "tag": "x" }` | 字段名必须一致。缺少的字段使用该类型的默认值（`0`、`null`、`false`），不是方法上的 `= 默认值` |
+
+可以省略的成员不要拆成多个方法参数。放进一个自定义类型，作为那一个参数发出去。类型内部的缺字段由 JSON 反序列化决定：
+
+```csharp
+public sealed class QuoteReq
+{
+    public int Amount { get; set; }
+    public string? Currency { get; set; } // 缺字段则为 null
+    public int? Retries { get; set; }
+}
+
+Task<string> QuoteAsync(QuoteReq req, CancellationToken ct = default);
+// 载荷是 QuoteReq，不是 { "req": ... }。另一端参数可以不叫 req
+```
+
+### 请求：注册实现与调用对方
+
+```csharp
+// 服务端登记工厂。T 可以是接口，也可以是实现了该接口的类
+serverRouter.AddRequestHandler<IBilling>(peer => new BillingImpl(peer));
+
+// 客户端从自己的那条连接取出代理
+var peer = await client.ConnectAsync();
+IBilling billing = peer.GetRequestProxy<IBilling>();
+int n = await billing.PayAsync(new PayReq { Amount = 41 });
+```
+
+`[RpcRequest]` 也可以标在服务类上，只用 `AddRequestHandler`。客户端用接口加相同前缀（或相同的 `[RpcMethod]`）对齐：
+
+```csharp
+[RpcRequest] // 默认前缀 InventoryService
+public class InventoryService
+{
+    public Task<int> GetStockAsync(string sku, CancellationToken ct = default) => /* ... */;
+}
+serverRouter.AddRequestHandler(peer => new InventoryService()); // InventoryService.GetStock
+
+[RpcRequest("InventoryService")]
+public interface IInventory
+{
+    Task<int> GetStockAsync(string sku, CancellationToken ct = default);
+}
+```
+
+服务端一个路由器对应全部连接。要调用其中某一条连接，从那个 `NamedPipePeer` 取代理：
+
+```csharp
+IBilling one = serverPeer.GetRequestProxy<IBilling>();
+```
+
+### 通知：接收与发送
+
+`AddNotifyHandler<T>(factory)` 让本端可以接收，并出现在目录里，这样对方的订阅才能成功。它不会自动订阅。每条连接 `Start` 时调用工厂创建一个实例；实例实现 `IDisposable` 时，连接释放会调用 `Dispose`。接收端再调用 `AddNotifyProxy<T>()`，连接后才会自动订阅。发送使用 `GetNotifyProxy` 返回的生成代理。
+
+```csharp
+// 服务端：可以接收该通知，但不自动订阅
+serverRouter.AddNotifyHandler<IOrderEvents>(peer => new OrderEventsImpl(peer));
+
+// 客户端：可以接收，并在连接后自动订阅
+clientRouter.AddNotifyHandler<IOrderEvents>(peer => new OrderEventsSink(peer));
+clientRouter.AddNotifyProxy<IOrderEvents>();
+
+// 生成的代理只向这一条连接发送
+IOrderEvents outgoing = serverPeer.GetNotifyProxy<IOrderEvents>();
+await outgoing.UpdatedAsync("hello");
+```
+
+多连接上的全量广播和按订阅定向推送仍用 `PipePeers` 的字符串 API：`Notify` 与 `NotifySubscribers`。
+
+### 诊断
+
+| ID | 条件 |
+|----|------|
+| NPRC001 | 方法返回类型不是 `Task` / `Task<T>` |
+| NPRC002 | 契约类型带类型参数 |
+| NPRC003 | RPC 名 UTF-8 超过 255 字节 |
+| NPRC004 | 契约含属性、事件、索引器等非方法成员 |
+| NPRC005 | 方法含 `ref` / `in` / `out` 参数 |
+| NPRC006 | `[RpcNotify]` 方法返回 `Task<T>` |
+| NPRC007 | 同一类型同时标了 `[RpcRequest]` 与 `[RpcNotify]` |
+
+通过 **NuGet** 引用本库时会自动启用 Generator。同解决方案内若只用 `ProjectReference` 引用主库，需额外将 `NamedPipeRpc.Generators` 以 Analyzer 方式引用（`NamedPipeRpc.Test.ClientContracts` / `ServerContracts` 已示例）。
+
 ## 核心类型
 
 | 类型 | 职责 | 关键对外 API |
 |------|------|-------------|
-| `HandlerRouter` | 本端方法路由注册 | `AddRequestHandler` / `AddNotifyHandler` / `RemoveRequestHandler` / `RemoveNotifyHandler` |
+| `HandlerRouter` | 本端方法目录 | 按方法名的 `AddRequestHandler` / `AddNotifyHandler`；契约的 `Add*Handler` / `AddNotifyProxy` |
 | `RpcService` | 服务端监听、接受连接 | `Start` / `Close` / `Peers` / `Connected` / `OnError` |
 | `RpcClient` | 客户端连管道 | `ConnectAsync` → `NamedPipePeer` |
-| `NamedPipePeer` | 单连接收发 | `Request` / `Notify` / `SubscribeAsync` / `ListRemote*` / 远端目录事件 |
+| `NamedPipePeer` | 单连接收发 | `Request` / `Notify`；契约的 `GetRequestProxy` / `GetNotifyProxy`；`SubscribeAsync` / `ListRemote*` |
 | `PipePeers` | 多连接集合与广播 | `Notify`（全量）/ `NotifySubscribers`（定向）/ `Request`（收集全部响应） |
 | `RpcContext<T>` | Handler 上下文 | `Message` / `Peer` / `Method` / `MessageId`（取消令牌由 `Handle` 独立参数传入） |
 | `IRequestHandler*` / `INotifyHandler*` | 强类型 Handler 契约 | `MethodName` + `Handle` |
+| `RpcRequestAttribute` / `RpcNotifyAttribute` / `RpcMethodAttribute` | 契约标记 | 请求服务 / 通知通道 / RPC 名覆盖 |
+| `RpcGeneratedExtensions`（生成） | 契约扩展 | `Add*Handler` / `AddNotifyProxy` / `peer.Get*Proxy` |
 | `Unit` | 空载荷占位 | `Unit.Value` / `Unit.Task` |
 
 ### 选项
@@ -120,7 +261,9 @@ var res = await peer.Request<MyReq, MyRes>("do.work", req);
 
 ### 客户端预注册与自动订阅（推荐）
 
-客户端要订阅对端某个 Notify，正确做法是：**连接前**在本端 Router 注册同名 Handler（既是接收处理函数，也是「期望订阅」清单）。`ConnectAsync` 创建 Peer 并 `Start` 后，会自动对本端已注册的全部 Notify 调用 `SubscribeAsync`。
+按方法名注册时，**连接前**在本端 Router 登记 Handler。它既是接收处理函数，也是连接后的自动订阅清单。`ConnectAsync` 创建 Peer 并 `Start` 后，会对这份清单调用 `SubscribeAsync`。
+
+契约接口不走这条合并路径：`AddNotifyHandler<T>(factory)` 只表示本端可以接收，并为每条连接创建一个实例；`AddNotifyProxy<T>()` 才加入自动订阅清单。发送用 `peer.GetNotifyProxy<T>()`，返回的是生成器产出的代理。
 
 ```csharp
 var pipe = "demo-notify";
@@ -243,7 +386,8 @@ await peer.UnsubscribeAsync("order.updated"); // 移出期望集，之后不再�
 
 | 工程 | 内容 |
 |------|------|
-| [`NamedPipeRpc.Test`](../NamedPipeRpc.Test) | 功能测试；发现 / 订阅 / 定向推送见 `ServiceDiscoveryTests` |
+| [`NamedPipeRpc.Test`](../NamedPipeRpc.Test) | 功能测试；发现 / 订阅见 `ServiceDiscoveryTests`；契约代理见 `RpcContractProxyTests` |
+| [`NamedPipeRpc.Test.ClientContracts`](../NamedPipeRpc.Test.ClientContracts) / [`ServerContracts`](../NamedPipeRpc.Test.ServerContracts) | 跨程序集契约端到端：同名接口、类注册、`[RpcMethod]`、类契约名对齐 |
 | [`NamedPipeRpc.Benchmark`](../NamedPipeRpc.Benchmark) | `IpcLatencyBenchmarks` / `IpcPayloadBenchmarks` / `IpcThroughputBenchmarks` / `ServiceDiscoveryBenchmarks` |
 
 ### 性能结果（.NET 8）

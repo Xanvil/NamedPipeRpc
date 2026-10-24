@@ -1,0 +1,9 @@
+<Project>
+  <!--
+    通过 NuGet 引用 NamedPipeRpc 时，将 Source Generator 注入消费方编译。
+    同解决方案内仅 ProjectReference 主库时不会传递 Analyzer，需另行引用 NamedPipeRpc.Generators。
+  -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)..\analyzers\dotnet\cs\NamedPipeRpc.Generators.dll')">
+    <Analyzer Include="$(MSBuildThisFileDirectory)..\analyzers\dotnet\cs\NamedPipeRpc.Generators.dll" />
+  </ItemGroup>
+</Project>

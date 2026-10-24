@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      纯 NuGet 消费方冒烟：不加入主解决方案，避免未 pack 时还原失败。
+      覆盖 Directory.Build.props 的多 TFM；关闭中央包版本管理以便写死本地包版本。
+    -->
+    <OutputType>Exe</OutputType>
+    <!-- 覆盖 Directory.Build.props 的 net472;net8.0 -->
+    <TargetFrameworks>net8.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>NamedPipeRpc.PackageSmoke</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <RestoreAdditionalProjectSources>$(MSBuildThisFileDirectory)..\artifacts\nuget</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 仅 PackageReference；生成器应由 nupkg 内 analyzers 自动启用 -->
+    <PackageReference Include="NamedPipeRpc" Version="1.1.0" />
+  </ItemGroup>
+
+</Project>

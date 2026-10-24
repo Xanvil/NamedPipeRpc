@@ -59,6 +59,11 @@ public class NamedPipePeer : IDisposable
 
 
     ConcurrentDictionary<long, TaskCompletionSource<object?>> _waitingRes;
+    readonly Dictionary<Type, object> _requestProxies = new();
+    readonly Dictionary<Type, object> _notifyProxies = new();
+    /// <summary>本连接上的契约处理器。键是契约类型，值是工厂为这条连接创建的实例。</summary>
+    readonly Dictionary<Type, object> _connectionHandlers = new();
+    readonly object _connectionHandlerSync = new();
 
     CancellationTokenSource? _cts;
 
@@ -89,6 +94,7 @@ public class NamedPipePeer : IDisposable
     /// </summary>
     public void Start()
     {
+        Router.ActivateConnection(this);
         _cts = new();
         var ct = _cts.Token;
         Task.Run(() => RecieveTask(ct));
@@ -118,6 +124,84 @@ public class NamedPipePeer : IDisposable
     public void Close()
     {
         Dispose();
+    }
+
+    /// <summary>
+    /// 放入本连接的契约处理器。同一契约已有实例时返回 false，调用方负责释放多出来的对象。
+    /// </summary>
+    public bool TryAddConnectionHandler(Type contractType, object handler)
+    {
+        if (contractType is null) throw new ArgumentNullException(nameof(contractType));
+        if (handler is null) throw new ArgumentNullException(nameof(handler));
+        lock (_connectionHandlerSync)
+        {
+            if (_connectionHandlers.ContainsKey(contractType))
+                return false;
+            _connectionHandlers[contractType] = handler;
+            return true;
+        }
+    }
+
+    /// <summary>取出本连接上该契约的处理器。尚未创建时抛出 <see cref="InvalidOperationException"/>。</summary>
+    public TContract GetConnectionHandler<TContract>() where TContract : class
+    {
+        lock (_connectionHandlerSync)
+        {
+            if (_connectionHandlers.TryGetValue(typeof(TContract), out var handler) && handler is TContract typed)
+                return typed;
+        }
+
+        throw new InvalidOperationException($"连接上没有 {typeof(TContract).FullName} 的处理器。");
+    }
+
+    /// <summary>释放本连接上实现了 <see cref="IDisposable"/> 的处理器。同一个实例只释放一次。</summary>
+    void DisposeConnectionHandlers()
+    {
+        object[] handlers;
+        lock (_connectionHandlerSync)
+        {
+            handlers = new object[_connectionHandlers.Count];
+            _connectionHandlers.Values.CopyTo(handlers, 0);
+            _connectionHandlers.Clear();
+        }
+
+        var seen = new List<object>(handlers.Length);
+        foreach (var handler in handlers)
+        {
+            if (handler is null)
+                continue;
+            bool already = false;
+            foreach (var item in seen)
+            {
+                if (ReferenceEquals(item, handler))
+                {
+                    already = true;
+                    break;
+                }
+            }
+            if (already)
+                continue;
+            seen.Add(handler);
+            if (handler is IDisposable disposable)
+                disposable.Dispose();
+        }
+    }
+
+    /// <summary>保存指向本连接的契约代理。</summary>
+    public void AddContractProxy(Type contractType, object proxy, bool notify)
+    {
+        if (contractType is null) throw new ArgumentNullException(nameof(contractType));
+        if (proxy is null) throw new ArgumentNullException(nameof(proxy));
+        var table = notify ? _notifyProxies : _requestProxies;
+        table[contractType] = proxy;
+    }
+
+    /// <summary>读取指向本连接的契约代理。</summary>
+    public bool TryGetContractProxy(Type contractType, bool notify, out object? proxy)
+    {
+        if (contractType is null) throw new ArgumentNullException(nameof(contractType));
+        var table = notify ? _notifyProxies : _requestProxies;
+        return table.TryGetValue(contractType, out proxy);
     }
 
     public Task Notify(string method, CancellationToken ct = default)
@@ -776,6 +860,8 @@ public class NamedPipePeer : IDisposable
     {
         if (isDispose) return;
         isDispose = true;
+        Router.DeactivateConnection(this);
+        DisposeConnectionHandlers();
         _cts?.Cancel();
         PipeStream.Close();
 

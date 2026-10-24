@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      编译期诊断冒烟：故意写入非法 [RpcRequest] / [RpcNotify]，期望包内 Source Generator 报 NPRC00x。
+      不加入主解决方案；由 Verify-NamedPipeRpcNupkg.ps1 断言 build 失败。
+    -->
+    <TargetFrameworks>net8.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>NamedPipeRpc.PackageSmoke.Diagnostics</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+    <RestoreAdditionalProjectSources>$(MSBuildThisFileDirectory)..\artifacts\nuget</RestoreAdditionalProjectSources>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NamedPipeRpc" Version="1.1.0" />
+  </ItemGroup>
+
+</Project>

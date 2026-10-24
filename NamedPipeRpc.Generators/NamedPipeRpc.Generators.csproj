@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 覆盖 Directory.Build.props 的多 TFM：分析器仅需 netstandard2.0 -->
+    <TargetFrameworks>netstandard2.0</TargetFrameworks>
+    <RootNamespace>Xanvil.NamedPipeRpc.Generators</RootNamespace>
+    <AssemblyName>NamedPipeRpc.Generators</AssemblyName>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsPackable>false</IsPackable>
+    <!-- 不作为应用引用；由主库以 Analyzer 方式引用 -->
+    <NoWarn>$(NoWarn);NU5128;RS2008</NoWarn>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 版本见 Directory.Packages.props；不流入消费方依赖 -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>
